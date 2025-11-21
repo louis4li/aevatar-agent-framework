@@ -6,10 +6,13 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans.Configuration;
 using Orleans.Hosting;
+using Orleans.Serialization; // Added
 using Orleans.Streams;
+/*
 using Orleans.Streams.Kafka.Config;
 using Orleans.Streams.Kafka.Core;
 using MongoDB.Driver;
+*/
 using Serilog;
 
 namespace Aevatar.Silo.Extensions;
@@ -43,6 +46,15 @@ public static class OrleansHostExtension
             
             // Configure additional Orleans options
             ConfigureOrleansOptions(siloBuilder, configuration);
+            
+            // Add Protobuf serializer
+            siloBuilder.ConfigureServices(services => 
+            {
+                services.AddSerializer(serializerBuilder => 
+                {
+                    serializerBuilder.AddProtobufSerializer();
+                });
+            });
             
             Log.Information("✅ Orleans configuration completed");
         });
@@ -92,6 +104,8 @@ public static class OrleansHostExtension
         Log.Information("🗄️  Configuring Storage:");
         Log.Information("  Provider: {Provider}", storageProvider);
         
+        // Temporarily disabled MongoDB
+        /*
         if (storageProvider.Equals("MongoDB", StringComparison.OrdinalIgnoreCase))
         {
             ConfigureMongoDBStorage(siloBuilder, configuration);
@@ -100,6 +114,8 @@ public static class OrleansHostExtension
         {
             ConfigureMemoryStorage(siloBuilder);
         }
+        */
+        ConfigureMemoryStorage(siloBuilder);
     }
     
     /// <summary>
@@ -115,6 +131,7 @@ public static class OrleansHostExtension
         Log.Information("  ✅ Using Memory Storage (fast, non-persistent)");
     }
     
+    /*
     /// <summary>
     /// Configure MongoDB Storage (Production-ready, persistent)
     /// </summary>
@@ -142,6 +159,7 @@ public static class OrleansHostExtension
         // siloBuilder.AddMongoDBGrainStorage("Default", options => { ... })
         // siloBuilder.AddMongoDBGrainStorage("EventStoreStorage", options => { ... })
     }
+    */
     
     /// <summary>
     /// Configure streaming providers (Orleans Stream or Kafka)
@@ -157,6 +175,8 @@ public static class OrleansHostExtension
         Log.Information("  Provider: {Provider}", streamProvider);
         Log.Information("  DefaultNamespace: {Namespace}", streamNamespace);
         
+        // Temporarily disabled Kafka
+        /*
         if (streamProvider.Equals("Kafka", StringComparison.OrdinalIgnoreCase))
         {
             ConfigureKafkaStreaming(siloBuilder, configuration, streamNamespace);
@@ -165,6 +185,8 @@ public static class OrleansHostExtension
         {
             ConfigureOrleansMemoryStreaming(siloBuilder, configuration, streamNamespace);
         }
+        */
+        ConfigureOrleansMemoryStreaming(siloBuilder, configuration, streamNamespace);
     }
     
     /// <summary>
@@ -190,6 +212,7 @@ public static class OrleansHostExtension
         Log.Information("  ✅ Using Orleans Memory Streaming (simple, no external dependencies)");
     }
     
+    /*
     /// <summary>
     /// Configure Kafka Streaming (Production-ready, high-throughput)
     /// </summary>
@@ -251,6 +274,7 @@ public static class OrleansHostExtension
         
         Log.Information("  ✅ Using Kafka Streaming (high-throughput, production-ready)");
     }
+    */
     
     /// <summary>
     /// Configure additional Orleans options (timeouts, serialization, etc.)
