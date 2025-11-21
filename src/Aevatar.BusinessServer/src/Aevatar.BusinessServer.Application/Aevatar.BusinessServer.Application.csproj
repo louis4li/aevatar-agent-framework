@@ -28,11 +28,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\Aevatar.Agents.Abstractions\Aevatar.Agents.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.Agents.Core\Aevatar.Agents.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.BusinessServer.Agents\Aevatar.BusinessServer.Agents.csproj" />
   </ItemGroup>
 
   <!-- Protobuf -->
   <ItemGroup>
-    <Protobuf Include="Protos\business_agent.proto" GrpcServices="None" />
+    <!-- <Protobuf Include="Protos\business_agent.proto" GrpcServices="None" /> -->
   </ItemGroup>
 
 </Project>

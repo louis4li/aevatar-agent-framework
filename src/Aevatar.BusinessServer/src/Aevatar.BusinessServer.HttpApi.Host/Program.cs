@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Aevatar.BusinessServer.HttpApi.Host.Extensions;
 using Microsoft.AspNetCore.Builder;
@@ -8,9 +9,13 @@ using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.Configuration;
 using Orleans.Hosting;
+using Orleans.Providers.MongoDB.Configuration;
+using Orleans.Streams.Kafka.Config;
 using Serilog;
 using Serilog.Events;
 using Orleans.Serialization;
+using Orleans.Providers.MongoDB.Configuration; // Required for MongoDB options
+using MongoDB.Driver;
 
 namespace Aevatar.BusinessServer.HttpApi.Host;
 
@@ -76,32 +81,84 @@ public class Program
 
     /// <summary>
     /// Configure Orleans when using Orleans runtime
+    /// Matches Legacy Silo configuration (MongoDB Clustering)
     /// </summary>
     private static void ConfigureOrleans(WebApplicationBuilder builder, OrleansRuntimeOptions orleansOptions)
     {
         builder.Host.UseOrleansClient((context, clientBuilder) =>
         {
-            if (orleansOptions.UseLocalhostClustering)
+            var config = context.Configuration;
+            // Use Default connection string for MongoDB
+            var connectionString = config.GetConnectionString("Default") ?? "mongodb://localhost:27017/AevatarBusiness";
+            var databaseName = "AevatarBusiness"; // Should match Silo config
+            
+            Log.Information("🌐 Configuring Orleans Client with MongoDB Clustering");
+            Log.Information("   ConnectionString: {ConnectionString}", connectionString);
+            Log.Information("   DatabaseName: {DatabaseName}", databaseName);
+
+            // 1. Configure MongoDB Client
+            clientBuilder.UseMongoDBClient(connectionString);
+
+            // 2. Configure Clustering (Must match Silo)
+            clientBuilder.UseMongoDBClustering(options =>
             {
-                // Development: localhost clustering
-                clientBuilder.UseLocalhostClustering(orleansOptions.GatewayPort);
-                Log.Information("🌐 Orleans Client configured for localhost clustering");
+                options.DatabaseName = databaseName;
+                options.Strategy = MongoDBMembershipStrategy.SingleDocument;
+                options.CollectionPrefix = "OrleansAevatar"; 
+            });
+
+            // 3. Configure Cluster Options
+            clientBuilder.Configure<ClusterOptions>(options =>
+            {
+                options.ClusterId = orleansOptions.ClusterId;
+                options.ServiceId = orleansOptions.ServiceId;
+            });
+            
+            // 4. Configure Stream Provider (MUST match Silo configuration!)
+            var streamProvider = config.GetValue<string>("Streaming:Provider") ?? "OrleansStream";
+            Log.Information("🌊 Client Stream Provider: {Provider}", streamProvider);
+            
+            if (string.Equals("Kafka", streamProvider, StringComparison.OrdinalIgnoreCase))
+            {
+                // Kafka Stream (must match Silo Kafka config)
+                var bootstrapServers = config.GetValue<string>("Kafka:BootstrapServers") ?? "localhost:9092";
+                var consumerGroupId = config.GetValue<string>("Kafka:ConsumerGroupId") ?? "aevatar-client-consumers";
+                var topics = config.GetValue<string>("Streaming:DefaultNamespace") ?? "agent-events";
+                
+                Log.Information("   Using Kafka Stream");
+                Log.Information("   BootstrapServers: {Servers}", bootstrapServers);
+                Log.Information("   ConsumerGroupId: {GroupId}", consumerGroupId);
+                Log.Information("   Topics: {Topics}", topics);
+                
+                clientBuilder
+                    .AddKafka(orleansOptions.StreamProviderName)
+                    .WithOptions(options =>
+                    {
+                        options.BrokerList = new List<string> { bootstrapServers };
+                        options.ConsumerGroupId = consumerGroupId;
+                        options.ConsumeMode = ConsumeMode.LastCommittedMessage;
+                        
+                        foreach (var topic in topics.Split(','))
+                        {
+                            options.AddTopic(topic.Trim(), new TopicCreationConfig
+                            {
+                                AutoCreate = true,
+                                Partitions = 8,
+                                ReplicationFactor = 1
+                            });
+                        }
+                    })
+                    .AddJson()
+                    .Build();
             }
             else
             {
-                // Production: configure actual clustering
-                clientBuilder.Configure<ClusterOptions>(options =>
-                {
-                    options.ClusterId = orleansOptions.ClusterId;
-                    options.ServiceId = orleansOptions.ServiceId;
-                });
-                Log.Information("🌐 Orleans Client configured for production clustering");
+                // Orleans Memory Stream (for development)
+                Log.Information("   Using Memory Stream");
+                clientBuilder.AddMemoryStreams(orleansOptions.StreamProviderName);
             }
-            
-            // Add memory stream provider
-            clientBuilder.AddMemoryStreams(orleansOptions.StreamProviderName);
 
-            // Add Protobuf serializer
+            // 5. Add Protobuf serializer
             clientBuilder.ConfigureServices(services =>
             {
                 services.AddSerializer(serializerBuilder =>
@@ -112,7 +169,6 @@ public class Program
             
             Log.Information("   ClusterId: {ClusterId}", orleansOptions.ClusterId);
             Log.Information("   ServiceId: {ServiceId}", orleansOptions.ServiceId);
-            Log.Information("   GatewayPort: {GatewayPort}", orleansOptions.GatewayPort);
         });
     }
 }

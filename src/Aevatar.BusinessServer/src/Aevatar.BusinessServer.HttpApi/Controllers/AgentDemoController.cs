@@ -1,7 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Aevatar.Agents.Abstractions;
-using Aevatar.BusinessServer.Application.Agents;
+using Aevatar.BusinessServer.Agents.Agents;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.AspNetCore.Mvc;
@@ -155,7 +155,7 @@ public class AgentDemoController : AbpControllerBase
                 AgentId = stats.AgentId,
                 ProcessedEventsCount = stats.ProcessedCount,
                 LastMessage = stats.LastMessage,
-                LastUpdated = stats.LastUpdated
+                LastUpdated = stats.LastUpdated?.ToDateTime() ?? DateTime.MinValue
             });
         }
         catch (Exception ex)
@@ -166,18 +166,85 @@ public class AgentDemoController : AbpControllerBase
     }
 
     /// <summary>
+    /// Set parent for agent (establishes hierarchy)
+    /// </summary>
+    [HttpPost("agents/{childId}/parent/{parentId}")]
+    public async Task<IActionResult> SetParent([FromRoute] string childId, [FromRoute] string parentId)
+    {
+        if (!Guid.TryParse(childId, out var cId) || !Guid.TryParse(parentId, out var pId))
+        {
+            return BadRequest("Invalid ID format");
+        }
+
+        try
+        {
+            var childActor = await _actorManager.GetActorAsync(cId);
+            if (childActor == null) return NotFound($"Child agent {childId} not found");
+
+            var parentActor = await _actorManager.GetActorAsync(pId);
+            if (parentActor == null) return NotFound($"Parent agent {parentId} not found");
+
+            // Establish bidirectional relationship
+            await childActor.SetParentAsync(pId);
+            await parentActor.AddChildAsync(cId);
+            
+            _logger.LogInformation("✅ Parent-child relationship established: {Child} -> {Parent}", childId, parentId);
+            return Ok(new { message = $"Child {childId} now has parent {parentId}" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error setting parent");
+            return StatusCode(500, $"Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Publish event to agent's stream
+    /// </summary>
+    [HttpPost("agents/{agentId}/events")]
+    public async Task<IActionResult> PublishEvent(
+        [FromRoute] string agentId,
+        [FromBody] AgentEventRequest request)
+    {
+        if (!Guid.TryParse(agentId, out var id))
+        {
+            return BadRequest("Invalid agent ID format");
+        }
+
+        try
+        {
+            var actor = await _actorManager.GetActorAsync(id);
+            if (actor == null) return NotFound($"Agent {agentId} not found");
+
+            var agent = actor.GetAgent() as SimpleBusinessAgent;
+            if (agent == null) return StatusCode(500, "Agent type mismatch");
+
+            // Create event and publish
+            var evt = new Business.Server.BusinessMessageEvent
+            {
+                Message = request.Message,
+                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow)
+            };
+
+            await agent.ProcessMessageAsync(request.Message);
+            
+            _logger.LogInformation("✅ Event published to agent {AgentId}", agentId);
+            return Ok(new { message = "Event published successfully", eventData = request.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error publishing event");
+            return StatusCode(500, $"Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Test agent health
     /// </summary>
-    /// <returns>Health status</returns>
     [HttpGet("health")]
     public IActionResult GetHealth()
     {
-        return Ok(new
-        {
-            Status = "Healthy",
-            Timestamp = DateTime.UtcNow,
-            Message = "Agent Framework is ready"
-        });
+        return Ok(new { Status = "Healthy", Timestamp = DateTime.UtcNow });
     }
 }
 
@@ -208,5 +275,10 @@ public class AgentStatsResponse
     public int ProcessedEventsCount { get; set; }
     public string LastMessage { get; set; } = string.Empty;
     public DateTime LastUpdated { get; set; }
+}
+
+public class AgentEventRequest
+{
+    public string Message { get; set; } = string.Empty;
 }
 

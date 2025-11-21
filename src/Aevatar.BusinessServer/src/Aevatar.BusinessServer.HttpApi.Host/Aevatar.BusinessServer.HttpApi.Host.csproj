@@ -33,6 +33,7 @@
     <ProjectReference Include="..\Aevatar.BusinessServer.Application\Aevatar.BusinessServer.Application.csproj" />
     <ProjectReference Include="..\Aevatar.BusinessServer.HttpApi\Aevatar.BusinessServer.HttpApi.csproj" />
     <ProjectReference Include="..\Aevatar.BusinessServer.MongoDB\Aevatar.BusinessServer.MongoDB.csproj" />
+    <ProjectReference Include="..\Aevatar.BusinessServer.Agents\Aevatar.BusinessServer.Agents.csproj" />
   </ItemGroup>
 
   <!-- Aevatar Agent Framework -->
@@ -49,6 +50,8 @@
     <PackageReference Include="Microsoft.Orleans.Client" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
+    <PackageReference Include="Orleans.Providers.MongoDB" />
+    <PackageReference Include="Orleans.Streams.Kafka" />
   </ItemGroup>
 
   <!-- Core ABP Framework -->

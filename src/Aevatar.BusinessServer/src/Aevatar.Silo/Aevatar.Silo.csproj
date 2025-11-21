@@ -16,8 +16,8 @@
     <PackageReference Include="Microsoft.Orleans.Streaming" />
     <PackageReference Include="Microsoft.Orleans.Persistence.Memory" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
-    <!-- <PackageReference Include="Orleans.Providers.MongoDB" /> -->
-    <!-- <PackageReference Include="Orleans.Streams.Kafka" /> -->
+    <PackageReference Include="Orleans.Providers.MongoDB" />
+    <PackageReference Include="Orleans.Streams.Kafka" />
     
     <!-- Microsoft Extensions -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
@@ -49,8 +49,15 @@
 
   <!-- Project References -->
   <ItemGroup>
+    <!-- Agent Framework (CRITICAL for Grain discovery) -->
+    <ProjectReference Include="../../../Aevatar.Agents.Abstractions/Aevatar.Agents.Abstractions.csproj" />
+    <ProjectReference Include="../../../Aevatar.Agents.Core/Aevatar.Agents.Core.csproj" />
+    <ProjectReference Include="../../../Aevatar.Agents.Runtime.Orleans/Aevatar.Agents.Runtime.Orleans.csproj" />
+    
+    <!-- Business Server Projects -->
     <ProjectReference Include="..\Aevatar.BusinessServer.Domain\Aevatar.BusinessServer.Domain.csproj" />
     <ProjectReference Include="..\Aevatar.BusinessServer.Application\Aevatar.BusinessServer.Application.csproj" />
+    <ProjectReference Include="..\Aevatar.BusinessServer.Agents\Aevatar.BusinessServer.Agents.csproj" />
     <ProjectReference Include="..\Aevatar.BusinessServer.MongoDB\Aevatar.BusinessServer.MongoDB.csproj" />
   </ItemGroup>
 

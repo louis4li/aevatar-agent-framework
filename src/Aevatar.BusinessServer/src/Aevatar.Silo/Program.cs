@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using MongoDB.Driver;
 using Aevatar.Silo.Extensions;
+using Aevatar.BusinessServer.Agents.Agents; // CRITICAL: Reference to force assembly load
 
 namespace Aevatar.Silo;
 
@@ -90,9 +91,8 @@ public class Program
                     return client.GetDatabase(databaseName);
                 });
 
-                // TODO: Add agent-specific services here when framework is integrated
-                // services.AddSingleton<IEventStore, MongoDBEventStore>();
-                // services.AddSingleton<IGAgentActorManager, OrleansGAgentActorManager>();
+                // Ensure Grains assembly is loaded for Orleans type discovery
+                _ = typeof(SimpleBusinessAgent);
                 
                 Log.Information("✅ Application services configured");
             });

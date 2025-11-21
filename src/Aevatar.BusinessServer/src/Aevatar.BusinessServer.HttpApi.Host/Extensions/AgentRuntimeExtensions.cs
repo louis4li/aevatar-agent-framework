@@ -11,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Orleans;
 using Serilog;
 
 namespace Aevatar.BusinessServer.HttpApi.Host.Extensions;
@@ -115,11 +116,20 @@ public static class AgentRuntimeExtensions
         services.Configure<Aevatar.Agents.StreamingOptions>(options =>
         {
             options.StreamProviderName = orleansOptions.StreamProviderName;
+            // Get DefaultNamespace from Streaming configuration
+            var config = services.BuildServiceProvider().GetRequiredService<IConfiguration>();
+            options.DefaultStreamNamespace = config.GetValue("Streaming:DefaultNamespace", "AevatarAgents");
         });
 
         // Orleans runtime requires Orleans Silo to be configured via UseOrleansClient
         // The actual grain factory comes from Orleans
         services.AddSingleton<IGAgentActorFactory, Aevatar.Agents.Runtime.Orleans.OrleansGAgentActorFactory>();
+
+        // Register Orleans Actor Manager
+        services.AddSingleton<IGAgentActorManager, Aevatar.Agents.Runtime.Orleans.OrleansGAgentActorManager>();
+
+        // Ensure IGrainFactory is available (forward from IClusterClient if needed)
+        services.TryAddSingleton<IGrainFactory>(sp => sp.GetRequiredService<IClusterClient>());
 
         // Orleans subscription manager (optional - for advanced stream management)
         // services.AddSingleton<ISubscriptionManager>(...);

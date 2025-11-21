@@ -1,53 +1,113 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Orleans;
 using Orleans.Configuration;
 using Orleans.Hosting;
-using Orleans.Serialization; // Added
+using Orleans.Serialization;
 using Orleans.Streams;
-/*
 using Orleans.Streams.Kafka.Config;
-using Orleans.Streams.Kafka.Core;
 using MongoDB.Driver;
-*/
+using Orleans.Providers.MongoDB.Configuration;
 using Serilog;
 
 namespace Aevatar.Silo.Extensions;
 
 /// <summary>
 /// Orleans Host Configuration Extensions
-/// Provides flexible configuration for Storage and Streaming providers
+/// Aligned with Legacy Aevatar.Silo configuration pattern
 /// </summary>
 public static class OrleansHostExtension
 {
     /// <summary>
     /// Use Orleans with automatic configuration from appsettings.json
-    /// Supports:
-    /// - Storage: Memory (default) or MongoDB
-    /// - Streaming: OrleansStream (default) or Kafka
+    /// Pattern: UseMongoDBClient -> UseMongoDBClustering -> AddMongoDBGrainStorage (using shared client)
     /// </summary>
     public static IHostBuilder UseOrleansConfiguration(this IHostBuilder hostBuilder)
     {
         return hostBuilder.UseOrleans((context, siloBuilder) =>
         {
             var configuration = context.Configuration;
+            var orleansConfig = configuration.GetSection("Orleans");
+            var clusterId = orleansConfig.GetValue("ClusterId", "aevatar-cluster");
+            var serviceId = orleansConfig.GetValue("ServiceId", "aevatar-service");
+            var siloPort = orleansConfig.GetValue("SiloPort", 11111);
+            var gatewayPort = orleansConfig.GetValue("GatewayPort", 30000);
             
-            // Configure Orleans basics
-            ConfigureOrleansCluster(siloBuilder, configuration);
+            Log.Information("📋 Orleans Cluster Configuration:");
+            Log.Information("  ClusterId: {ClusterId}", clusterId);
+            Log.Information("  ServiceId: {ServiceId}", serviceId);
+            Log.Information("  SiloPort: {SiloPort}", siloPort);
+            Log.Information("  GatewayPort: {GatewayPort}", gatewayPort);
             
-            // Configure storage (Memory or MongoDB)
-            ConfigureStorage(siloBuilder, configuration);
+            // 1. Configure Endpoints
+            siloBuilder.ConfigureEndpoints(
+                siloPort: siloPort,
+                gatewayPort: gatewayPort,
+                listenOnAnyHostAddress: true // Bind to 0.0.0.0
+            );
             
-            // Configure streaming (Orleans Stream or Kafka)
+            // 2. Configure MongoDB Client (Shared)
+            var connectionString = configuration.GetConnectionString("Default") 
+                ?? "mongodb://localhost:27017/AevatarBusiness";
+            var databaseName = configuration.GetSection("Storage")
+                .GetValue("DatabaseName", "AevatarBusiness");
+                
+            Log.Information("🗄️  Configuring MongoDB Client (Shared):");
+            Log.Information("  ConnectionString: {ConnectionString}", connectionString);
+            Log.Information("  DatabaseName: {DatabaseName}", databaseName);
+
+            siloBuilder.UseMongoDBClient(connectionString);
+
+            // 3. Configure Clustering (MongoDB)
+            Log.Information("🤝 Configuring MongoDB Clustering...");
+            siloBuilder.UseMongoDBClustering(options =>
+            {
+                options.DatabaseName = databaseName;
+                options.Strategy = MongoDBMembershipStrategy.SingleDocument; // Legacy uses SingleDocument
+                // Prefix for membership table
+                options.CollectionPrefix = "OrleansAevatar"; 
+            });
+
+            // 4. Configure Cluster Options
+            siloBuilder.Configure<ClusterOptions>(options =>
+            {
+                options.ClusterId = clusterId;
+                options.ServiceId = serviceId;
+            });
+
+            // 5. Configure Storage (Using shared client)
+            Log.Information("💾 Configuring MongoDB Storage (Using Shared Client)...");
+            
+            // Default Storage
+            siloBuilder.AddMongoDBGrainStorage("Default", options => 
+            {
+                options.DatabaseName = databaseName;
+                options.CollectionPrefix = "OrleansAevatar";
+            });
+
+            // PubSubStore
+            siloBuilder.AddMongoDBGrainStorage("PubSubStore", options => 
+            {
+                options.DatabaseName = databaseName;
+                options.CollectionPrefix = "StreamStorage";
+            });
+
+            // EventStore Storage
+            siloBuilder.AddMongoDBGrainStorage("EventStoreStorage", options => 
+            {
+                options.DatabaseName = databaseName;
+                options.CollectionPrefix = "EventStore";
+            });
+
+            // 6. Configure Streaming (Orleans Memory Stream for now, Kafka later)
             ConfigureStreaming(siloBuilder, configuration);
             
-            // Configure additional Orleans options
-            ConfigureOrleansOptions(siloBuilder, configuration);
-            
-            // Add Protobuf serializer
+            // 7. Configure Serializer
             siloBuilder.ConfigureServices(services => 
             {
                 services.AddSerializer(serializerBuilder => 
@@ -56,246 +116,73 @@ public static class OrleansHostExtension
                 });
             });
             
-            Log.Information("✅ Orleans configuration completed");
+            // 8. Logging & Timeouts
+            siloBuilder.Configure<SiloMessagingOptions>(options =>
+            {
+                options.ResponseTimeout = TimeSpan.FromMinutes(5);
+                options.SystemResponseTimeout = TimeSpan.FromMinutes(5);
+            });
+            
+            Log.Information("✅ Orleans configuration completed (Legacy Pattern)");
         });
     }
-    
+
     /// <summary>
-    /// Configure Orleans cluster basics (ClusterId, ServiceId, Endpoints)
-    /// </summary>
-    private static void ConfigureOrleansCluster(ISiloBuilder siloBuilder, IConfiguration configuration)
-    {
-        var orleansConfig = configuration.GetSection("Orleans");
-        var clusterId = orleansConfig.GetValue("ClusterId", "aevatar-cluster");
-        var serviceId = orleansConfig.GetValue("ServiceId", "aevatar-service");
-        var siloPort = orleansConfig.GetValue("SiloPort", 11111);
-        var gatewayPort = orleansConfig.GetValue("GatewayPort", 30000);
-        
-        Log.Information("📋 Orleans Cluster Configuration:");
-        Log.Information("  ClusterId: {ClusterId}", clusterId);
-        Log.Information("  ServiceId: {ServiceId}", serviceId);
-        Log.Information("  SiloPort: {SiloPort}", siloPort);
-        Log.Information("  GatewayPort: {GatewayPort}", gatewayPort);
-        
-        siloBuilder
-            .UseLocalhostClustering(siloPort, gatewayPort, null, serviceId, clusterId)
-            .Configure<ClusterOptions>(options =>
-            {
-                options.ClusterId = clusterId;
-                options.ServiceId = serviceId;
-            })
-            .Configure<EndpointOptions>(options =>
-            {
-                options.AdvertisedIPAddress = System.Net.IPAddress.Loopback;
-                options.SiloPort = siloPort;
-                options.GatewayPort = gatewayPort;
-            });
-    }
-    
-    /// <summary>
-    /// Configure storage providers (Memory or MongoDB)
-    /// Default: Memory
-    /// </summary>
-    private static void ConfigureStorage(ISiloBuilder siloBuilder, IConfiguration configuration)
-    {
-        var storageConfig = configuration.GetSection("Storage");
-        var storageProvider = storageConfig.GetValue("Provider", "Memory"); // Default: Memory
-        
-        Log.Information("🗄️  Configuring Storage:");
-        Log.Information("  Provider: {Provider}", storageProvider);
-        
-        // Temporarily disabled MongoDB
-        /*
-        if (storageProvider.Equals("MongoDB", StringComparison.OrdinalIgnoreCase))
-        {
-            ConfigureMongoDBStorage(siloBuilder, configuration);
-        }
-        else
-        {
-            ConfigureMemoryStorage(siloBuilder);
-        }
-        */
-        ConfigureMemoryStorage(siloBuilder);
-    }
-    
-    /// <summary>
-    /// Configure Memory Storage (Default, fast for development)
-    /// </summary>
-    private static void ConfigureMemoryStorage(ISiloBuilder siloBuilder)
-    {
-        siloBuilder
-            .AddMemoryGrainStorage("Default")
-            .AddMemoryGrainStorage("PubSubStore")
-            .AddMemoryGrainStorage("EventStoreStorage");
-        
-        Log.Information("  ✅ Using Memory Storage (fast, non-persistent)");
-    }
-    
-    /*
-    /// <summary>
-    /// Configure MongoDB Storage (Production-ready, persistent)
-    /// </summary>
-    private static void ConfigureMongoDBStorage(ISiloBuilder siloBuilder, IConfiguration configuration)
-    {
-        var connectionString = configuration.GetConnectionString("MongoDB") 
-            ?? "mongodb://localhost:27017/AevatarBusiness";
-        var databaseName = configuration.GetSection("Storage")
-            .GetValue("DatabaseName", "AevatarBusiness");
-        
-        Log.Information("  ConnectionString: {ConnectionString}", connectionString);
-        Log.Information("  DatabaseName: {DatabaseName}", databaseName);
-        
-        // Memory storage for PubSub (required for streaming)
-        siloBuilder.AddMemoryGrainStorage("PubSubStore");
-        
-        // MongoDB storage for grain state and event sourcing
-        // TODO: Fix MongoDBGrainStorageOptions API when package is updated
-        Log.Warning("  ⚠️  MongoDB storage pending - using Memory as fallback");
-        siloBuilder
-            .AddMemoryGrainStorage("Default")
-            .AddMemoryGrainStorage("EventStoreStorage");
-        
-        // Future implementation:
-        // siloBuilder.AddMongoDBGrainStorage("Default", options => { ... })
-        // siloBuilder.AddMongoDBGrainStorage("EventStoreStorage", options => { ... })
-    }
-    */
-    
-    /// <summary>
-    /// Configure streaming providers (Orleans Stream or Kafka)
-    /// Default: Orleans Stream (Memory-based, simple)
+    /// Configure streaming providers (Orleans Memory or Kafka)
     /// </summary>
     private static void ConfigureStreaming(ISiloBuilder siloBuilder, IConfiguration configuration)
     {
         var streamConfig = configuration.GetSection("Streaming");
-        var streamProvider = streamConfig.GetValue("Provider", "OrleansStream"); // Default: OrleansStream
-        var streamNamespace = streamConfig.GetValue("DefaultNamespace", "agent-events");
+        var provider = streamConfig.GetValue("Provider", "OrleansStream");
+        var providerName = streamConfig.GetValue("ProviderName", "Default");
         
-        Log.Information("📡 Configuring Streaming:");
-        Log.Information("  Provider: {Provider}", streamProvider);
-        Log.Information("  DefaultNamespace: {Namespace}", streamNamespace);
-        
-        // Temporarily disabled Kafka
-        /*
-        if (streamProvider.Equals("Kafka", StringComparison.OrdinalIgnoreCase))
+        if (provider == "Kafka")
         {
-            ConfigureKafkaStreaming(siloBuilder, configuration, streamNamespace);
+            ConfigureKafkaStreaming(siloBuilder, configuration, providerName);
         }
         else
         {
-            ConfigureOrleansMemoryStreaming(siloBuilder, configuration, streamNamespace);
+            ConfigureOrleansMemoryStreaming(siloBuilder, configuration, providerName);
         }
-        */
-        ConfigureOrleansMemoryStreaming(siloBuilder, configuration, streamNamespace);
     }
-    
-    /// <summary>
-    /// Configure Orleans Memory Streaming (Default, simple, no external dependencies)
-    /// </summary>
-    private static void ConfigureOrleansMemoryStreaming(ISiloBuilder siloBuilder, IConfiguration configuration, string streamNamespace)
+
+    private static void ConfigureOrleansMemoryStreaming(ISiloBuilder siloBuilder, IConfiguration configuration, string providerName)
     {
-        var providerName = configuration.GetSection("Streaming").GetValue("ProviderName", "Default");
+        Log.Information("📡 Configuring Orleans Memory Stream");
         
         siloBuilder.AddMemoryStreams(providerName, streamConfig =>
         {
             streamConfig.ConfigureStreamPubSub(StreamPubSubType.ExplicitGrainBasedAndImplicit);
-            
-            // Configure pulling agent options for better performance
             streamConfig.ConfigurePullingAgent(pullingAgentConfig => pullingAgentConfig.Configure(options =>
             {
-                var streamSection = configuration.GetSection("Streaming");
-                options.GetQueueMsgsTimerPeriod = TimeSpan.FromMilliseconds(
-                    streamSection.GetValue("GetQueueMsgsTimerPeriodMs", 50));
+                options.GetQueueMsgsTimerPeriod = TimeSpan.FromMilliseconds(50);
             }));
         });
-        
-        Log.Information("  ✅ Using Orleans Memory Streaming (simple, no external dependencies)");
     }
-    
-    /*
-    /// <summary>
-    /// Configure Kafka Streaming (Production-ready, high-throughput)
-    /// </summary>
-    private static void ConfigureKafkaStreaming(ISiloBuilder siloBuilder, IConfiguration configuration, string streamNamespace)
+
+    private static void ConfigureKafkaStreaming(ISiloBuilder siloBuilder, IConfiguration configuration, string providerName)
     {
         var kafkaConfig = configuration.GetSection("Kafka");
         var bootstrapServers = kafkaConfig.GetValue("BootstrapServers", "localhost:9092");
         var consumerGroupId = kafkaConfig.GetValue("ConsumerGroupId", "aevatar-silo-consumers");
-        var providerName = configuration.GetSection("Streaming").GetValue("ProviderName", "KafkaStreamProvider");
         
-        Log.Information("  BootstrapServers: {BootstrapServers}", bootstrapServers);
-        Log.Information("  ConsumerGroupId: {ConsumerGroupId}", consumerGroupId);
-        
-        siloBuilder.AddPersistentStreams(providerName, KafkaAdapterFactory.Create, streamBuilder =>
-        {
-            streamBuilder.ConfigureStreamPubSub(StreamPubSubType.ExplicitGrainBasedAndImplicit);
-            
-            streamBuilder.Configure<KafkaStreamOptions>(optionsBuilder => optionsBuilder.Configure(options =>
+        Log.Information("📡 Configuring Kafka Stream Provider");
+        Log.Information("   Bootstrap Servers: {Servers}", bootstrapServers);
+        Log.Information("   Consumer Group: {Group}", consumerGroupId);
+
+        siloBuilder.AddKafka(providerName)
+            .WithOptions(options =>
             {
                 options.BrokerList = new List<string> { bootstrapServers };
                 options.ConsumerGroupId = consumerGroupId;
-                options.ConsumeMode = ConsumeMode.LastCommittedMessage;
-                options.PollTimeout = TimeSpan.FromMilliseconds(
-                    kafkaConfig.GetValue("PollTimeoutMs", 100));
-                
-                // Add default topic
-                options.AddTopic(streamNamespace, new TopicCreationConfig
+                options.AddTopic("agent-events", new Orleans.Streams.Kafka.Config.TopicCreationConfig
                 {
                     AutoCreate = true,
-                    Partitions = kafkaConfig.GetValue("DefaultPartitions", 8),
-                    ReplicationFactor = (short)kafkaConfig.GetValue("DefaultReplicationFactor", 1)
+                    Partitions = 8,
+                    ReplicationFactor = 1
                 });
-                
-                // Add additional topics from configuration
-                var topics = kafkaConfig.GetSection("Topics");
-                foreach (var topicSection in topics.GetChildren())
-                {
-                    var topicName = topicSection["Name"];
-                    if (!string.IsNullOrEmpty(topicName) && topicName != streamNamespace)
-                    {
-                        options.AddTopic(topicName, new TopicCreationConfig
-                        {
-                            AutoCreate = topicSection.GetValue("AutoCreate", true),
-                            Partitions = topicSection.GetValue("Partitions", 4),
-                            ReplicationFactor = (short)topicSection.GetValue("ReplicationFactor", 1)
-                        });
-                        Log.Information("  📍 Added topic: {TopicName}", topicName);
-                    }
-                }
-            }));
-            
-            // Configure pulling agent for stream processing
-            streamBuilder.ConfigurePullingAgent(pullingAgentBuilder => pullingAgentBuilder.Configure(options =>
-            {
-                options.GetQueueMsgsTimerPeriod = TimeSpan.FromMilliseconds(
-                    kafkaConfig.GetValue("GetQueueMsgsTimerPeriodMs", 50));
-            }));
-        });
-        
-        Log.Information("  ✅ Using Kafka Streaming (high-throughput, production-ready)");
-    }
-    */
-    
-    /// <summary>
-    /// Configure additional Orleans options (timeouts, serialization, etc.)
-    /// </summary>
-    private static void ConfigureOrleansOptions(ISiloBuilder siloBuilder, IConfiguration configuration)
-    {
-        siloBuilder
-            .Configure<SiloMessagingOptions>(options =>
-            {
-                options.ResponseTimeout = TimeSpan.FromMinutes(5);
-                options.SystemResponseTimeout = TimeSpan.FromMinutes(5);
             })
-            .Configure<GrainCollectionOptions>(options =>
-            {
-                options.CollectionAge = TimeSpan.FromDays(30);
-            })
-            .ConfigureLogging(logging =>
-            {
-                logging.ClearProviders();
-                logging.AddSerilog();
-            });
+            .AddLoggingTracker()
+            .Build();
     }
 }
-
