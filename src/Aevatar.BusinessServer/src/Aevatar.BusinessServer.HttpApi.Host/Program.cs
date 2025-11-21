@@ -1,10 +1,16 @@
 ﻿using System;
 using System.Threading.Tasks;
+using Aevatar.BusinessServer.HttpApi.Host.Extensions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Orleans;
+using Orleans.Configuration;
+using Orleans.Hosting;
 using Serilog;
 using Serilog.Events;
+using Orleans.Serialization;
 
 namespace Aevatar.BusinessServer.HttpApi.Host;
 
@@ -21,6 +27,18 @@ public class Program
         {
             Log.Information("Starting BusinessServer HttpApi.Host.");
             var builder = WebApplication.CreateBuilder(args);
+            
+            // Read Agent Runtime configuration
+            var runtimeOptions = builder.Configuration
+                .GetSection(AgentRuntimeOptions.SectionName)
+                .Get<AgentRuntimeOptions>() ?? new AgentRuntimeOptions();
+            
+            // Configure Orleans if using Orleans runtime
+            if (runtimeOptions.RuntimeType == AgentRuntimeType.Orleans)
+            {
+                ConfigureOrleans(builder, runtimeOptions.Orleans);
+            }
+            
             builder.Host
                 .AddAppSettingsSecretsJson()
                 .UseAutofac()
@@ -54,5 +72,47 @@ public class Program
         {
             Log.CloseAndFlush();
         }
+    }
+
+    /// <summary>
+    /// Configure Orleans when using Orleans runtime
+    /// </summary>
+    private static void ConfigureOrleans(WebApplicationBuilder builder, OrleansRuntimeOptions orleansOptions)
+    {
+        builder.Host.UseOrleansClient((context, clientBuilder) =>
+        {
+            if (orleansOptions.UseLocalhostClustering)
+            {
+                // Development: localhost clustering
+                clientBuilder.UseLocalhostClustering(orleansOptions.GatewayPort);
+                Log.Information("🌐 Orleans Client configured for localhost clustering");
+            }
+            else
+            {
+                // Production: configure actual clustering
+                clientBuilder.Configure<ClusterOptions>(options =>
+                {
+                    options.ClusterId = orleansOptions.ClusterId;
+                    options.ServiceId = orleansOptions.ServiceId;
+                });
+                Log.Information("🌐 Orleans Client configured for production clustering");
+            }
+            
+            // Add memory stream provider
+            clientBuilder.AddMemoryStreams(orleansOptions.StreamProviderName);
+
+            // Add Protobuf serializer
+            clientBuilder.ConfigureServices(services =>
+            {
+                services.AddSerializer(serializerBuilder =>
+                {
+                    serializerBuilder.AddProtobufSerializer();
+                });
+            });
+            
+            Log.Information("   ClusterId: {ClusterId}", orleansOptions.ClusterId);
+            Log.Information("   ServiceId: {ServiceId}", orleansOptions.ServiceId);
+            Log.Information("   GatewayPort: {GatewayPort}", orleansOptions.GatewayPort);
+        });
     }
 }
